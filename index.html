@@ -8,8 +8,14 @@
 
 
 <!-- ============================================================
-     META PIXEL — replace with your real Pixel ID if needed
+     META PIXEL
+     ⚠️ WARNING: Neeche wali ID '27153324431008636' mein 17 digits hain.
+     Real Meta Pixel IDs hamesha 15-16 digits ki hoti hain. Ye galat/typo
+     ID lag rahi hai — isi wajah se events tumhare real ad account tak
+     pahunch nahi rahe honge. Events Manager mein jaake apni exact
+     Pixel ID copy karo aur neeche replace karo.
      ============================================================ -->
+<!-- Meta Pixel Code -->
 <script>
 !function(f,b,e,v,n,t,s)
 {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
@@ -25,6 +31,7 @@ fbq('track', 'PageView');
 <noscript><img height="1" width="1" style="display:none"
 src="https://www.facebook.com/tr?id=27153324431008636&ev=PageView&noscript=1"
 /></noscript>
+<!-- End Meta Pixel Code -->
 <!-- ============================================================ -->
 
 <style>
@@ -644,18 +651,27 @@ src="https://www.facebook.com/tr?id=27153324431008636&ev=PageView&noscript=1"
   </a>
 </div>
 
+<!-- Fallback link — agar redirect kisi wajah se block ho jaye (in-app browser
+     restriction), user ke paas manual tap karne ka option ho -->
+<div style="text-align:center;padding:8px 16px;">
+  <a href="#" id="fallbackLink" style="display:none;font-size:12.5px;color:var(--bronze-light);text-decoration:underline;">
+    Telegram khud nahi khula? Yahan tap karo
+  </a>
+</div>
+
 <script>
 (function(){
   "use strict";
 
   /* ============================================================
-     CONFIG — edit these two lines only
+     Page-specific setup — Telegram link + button href fallback
+     (v2 tracking script neeche redirect ke liye hamesha
+     CONFIG.TELEGRAM_LINK use karega, lekin real href bhi set
+     kar rahe hain taaki agar JS kisi wajah se fail ho jaye,
+     buttons phir bhi kaam karein)
      ============================================================ */
   var TELEGRAM_URL = "https://t.me/+XUIYCpZxMwlkYmZl";
-  var REDIRECT_DELAY_MS = 200; // small delay so the pixel event has time to fire
-
-  /* ---------- Wire every Telegram button to the same link ---------- */
-  var allBtns = document.querySelectorAll('#telegramBtnHero, #telegramBtnFinal, #telegramBtnFooter, #telegramBtnSticky, #navCta');
+  var allBtns = document.querySelectorAll('#telegramBtnHero, #telegramBtnFinal, #telegramBtnSticky');
   allBtns.forEach(function(btn){ btn.setAttribute('href', TELEGRAM_URL); });
 
   /* ---------- Ticker content (built once, not hardcoded markup) ---------- */
@@ -715,52 +731,166 @@ src="https://www.facebook.com/tr?id=27153324431008636&ev=PageView&noscript=1"
     spotsEl.textContent = Math.max(3, slots) + ' spots open this week';
   }
 
-  /* ============================================================
-     META PIXEL — Lead event, fired once per real user click
-     - sessionStorage dedup: never double-fire in the same session
-     - isTrusted check: ignores synthetic/bot-dispatched clicks
-     - fires from the actual click handler, then redirects
-     ============================================================ */
-  var FIRED_KEY = 'lwg_lead_fired_v1';
+})();
+</script>
 
-  function hasFiredThisSession(){
-    try { return sessionStorage.getItem(FIRED_KEY) === '1'; }
-    catch (e) { return false; }
+<!-- ============================================================
+     UNIVERSAL TELEGRAM TRACK + REDIRECT SCRIPT — v2
+     Ye automatically #telegramBtnHero, #telegramBtnFinal,
+     #telegramBtnSticky (sab "telegramBtn" se start hote hain) aur
+     #fallbackLink ko wire kar dega — koi manual addEventListener
+     likhne ki zaroorat nahi.
+
+     v1 se v2 mein fix: pehle Lead event turant redirect ke saath
+     fire hota tha, jisse Pixel ka network beacon page-unload hote
+     hi cancel ho jata tha — Meta ko conversion ka pata hi nahi
+     chalta tha (chahe user asal mein Telegram pahunch jaye).
+     Ab redirect se pehle ~200ms ka chhota "flush window" diya
+     gaya hai taaki beacon complete ho sake.
+
+     NOTE: ENABLE_COUNTDOWN false rakha hai is page ke liye — ye
+     ek content-rich page hai (lessons, testimonials, etc.), user
+     ko browse karne ka time milna chahiye, bina force auto-redirect
+     ke. Agar chaho toh true kar sakte ho.
+     ============================================================ -->
+<script>
+(function () {
+  const CONFIG = {
+    TELEGRAM_LINK: "https://t.me/+XUIYCpZxMwlkYmZl",
+    ENABLE_COUNTDOWN: false,
+    COUNTDOWN_SECONDS: 10,
+    MIN_DWELL_MS: 1500,
+    REQUIRE_INTERACTION: true,
+    BOT_CHECK_ENABLED: true,
+    PIXEL_FLUSH_DELAY_MS: 200,
+  };
+
+  const pageLoadTime = Date.now();
+  let hasScrolled = false;
+  let hasMouseMoved = false;
+  window.addEventListener('scroll', () => { hasScrolled = true; }, { once: true });
+  document.addEventListener('mousemove', () => { hasMouseMoved = true; }, { once: true });
+  document.addEventListener('touchstart', () => { hasMouseMoved = true; }, { once: true });
+
+  function isLikelyRealUser() {
+    const timeOnPage = Date.now() - pageLoadTime;
+    if (timeOnPage < CONFIG.MIN_DWELL_MS) return false;
+    if (CONFIG.REQUIRE_INTERACTION && !hasScrolled && !hasMouseMoved) return false;
+    return true;
   }
-  function markFired(){
-    try { sessionStorage.setItem(FIRED_KEY, '1'); } catch (e) {}
+
+  function isProbablyBot() {
+    if (!CONFIG.BOT_CHECK_ENABLED) return false;
+    if (navigator.webdriver) return true;
+    if (/bot|crawl|spider|slurp|headless/i.test(navigator.userAgent)) return true;
+    return false;
   }
 
-  function handleTelegramClick(e){
-    var btn = e.currentTarget;
-    var url = btn.getAttribute('href') || TELEGRAM_URL;
+  let fired = false;
+  let redirected = false;
 
-    // Ignore non-trusted (scripted) clicks — real users only
-    if (e.isTrusted === false) {
-      window.location.href = url;
+  function doRedirect() {
+    if (redirected) return;
+    redirected = true;
+    window.location.href = CONFIG.TELEGRAM_LINK;
+  }
+
+  function showFallback() {
+    const fallback = document.getElementById('fallbackLink');
+    if (fallback) {
+      fallback.href = CONFIG.TELEGRAM_LINK;
+      fallback.style.display = '';
+      fallback.classList.add('show');
+    }
+  }
+
+  window.trackAndRedirect = function (event) {
+    // BEST PRACTICE ADD: agar click synthetic/bot-dispatched hai
+    // (e.isTrusted === false), turant redirect karo, koi event fire
+    // mat karo — genuine user interaction hi Lead count hona chahiye
+    if (event && event.isTrusted === false) {
+      doRedirect();
+      return;
+    }
+    if (event && typeof event.preventDefault === 'function') {
+      event.preventDefault();
+    }
+
+    if (fired) {
+      doRedirect();
+      return;
+    }
+    fired = true;
+
+    showFallback();
+
+    if (isProbablyBot()) {
+      doRedirect();
       return;
     }
 
-    e.preventDefault();
+    const eventId = 'lead_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    let pixelFired = false;
 
-    if (!hasFiredThisSession() && typeof fbq === 'function') {
-      fbq('track', 'Lead', {
-        content_name: 'Learn with CA Nitin Murarka SMC - Telegram Channel',
-        cta_location: btn.getAttribute('data-cta') || 'unknown'
-      });
-      markFired();
+    if (typeof fbq !== 'undefined') {
+      if (isLikelyRealUser()) {
+        fbq('track', 'Lead', {
+          content_name: 'Learn with CA Nitin Murarka SMC - Telegram Channel',
+        }, { eventID: eventId });
+      } else {
+        fbq('trackCustom', 'LowQualityClick', { eventID: eventId });
+      }
+      pixelFired = true;
     }
 
-    window.setTimeout(function(){
-      window.location.href = url;
-    }, REDIRECT_DELAY_MS);
+    setTimeout(doRedirect, pixelFired ? CONFIG.PIXEL_FLUSH_DELAY_MS : 0);
+  };
+
+  document.addEventListener('DOMContentLoaded', wireAllButtons);
+  if (document.readyState === 'interactive' || document.readyState === 'complete') {
+    wireAllButtons();
   }
 
-  allBtns.forEach(function(btn){
-    if (btn.id === 'navCta') return; // nav link scrolls to #join, no event needed twice
-    btn.addEventListener('click', handleTelegramClick);
-  });
+  function wireAllButtons() {
+    const selectors = [
+      '[data-telegram-btn]',
+      '.telegram-btn',
+      '#telegramBtn',
+      '#stickyTelegramBtn',
+      '#fallbackLink',
+      '[id^="telegramBtn"]',
+    ];
+    const buttons = document.querySelectorAll(selectors.join(','));
+    buttons.forEach((el) => {
+      el.addEventListener('click', window.trackAndRedirect);
+    });
 
+    setupCountdown();
+  }
+
+  function setupCountdown() {
+    if (!CONFIG.ENABLE_COUNTDOWN) return;
+
+    const counter =
+      document.getElementById('countdown') ||
+      document.getElementById('countTxt') ||
+      document.getElementById('count');
+
+    let time = CONFIG.COUNTDOWN_SECONDS;
+    if (counter) counter.textContent = time;
+
+    const timer = setInterval(() => {
+      time--;
+      if (counter) counter.textContent = time;
+
+      if (time <= 0) {
+        clearInterval(timer);
+        if (fired) return;
+        showFallback();
+        doRedirect();
+      }
+    }, 1000);
+  }
 })();
 </script>
 
